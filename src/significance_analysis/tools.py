@@ -1,273 +1,20 @@
 import math
 import typing
-from collections import namedtuple
 
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import pandas as pd
+from autorank._util import RankResult, get_sorted_rank_groups
+from matplotlib import pyplot as plt
+from pandas.api.types import is_numeric_dtype
 from pymer4.models import Lm, Lmer
 from scipy import stats
-from scipy.stats import studentized_range
 
-pd.set_option("chained_assignment", None)
-pd.set_option("display.max_rows", 5000)
-pd.set_option("display.max_columns", 5000)
-pd.set_option("display.width", 10000)
-
-
-def glrt(
-    mod1, mod2, names: list[str] = None, returns: bool = False
-) -> dict[str, typing.Any]:
-    """Generalized Likelihood Ratio Test on two Liner Mixed Effect Models from R
-
-    Args:
-        mod1 (Lmer): First, simple model, Null-Hypothesis assumes that this model contains not significantly less information as the second model
-        mod2 (Lmer): Second model, Alternative Hypothesis assumes that this model contains significant new information
-
-    Returns:
-        dict[str,typing.Any]: Result dictionary with Chi-Square-Score, Degrees of Freedom and p-value of the test
-    """
-    assert (
-        mod1.logLike
-        and mod2.logLike
-        and mod1.coefs is not None
-        and mod2.coefs is not None
-    )
-    chi_square = 2 * abs(mod1.logLike - mod2.logLike)
-    delta_params = abs(len(mod1.coefs) - len(mod2.coefs))
-    p = 1 - stats.chi2.cdf(chi_square, df=delta_params)
-    if names:
-        print(
-            f"{names[0]} ({round(mod1.logLike,2)}) {'==' if p>0.05 or mod1.logLike==mod2.logLike else '>>' if mod1.logLike>mod2.logLike else '<<'} {names[1]} ({round(mod2.logLike,2)})"
-        )
-        print(f"Chi-Square: {chi_square}, P-Value: {p}")
-    if returns:
-        return {
-            "p": p,
-            "chi_square": chi_square,
-            "df": delta_params,
-        }
-
-
-def model(
-    formula: str,
-    data: pd.DataFrame,
-    system_id: str = "algorithm",
-    factor: str = None,
-    factor_list: list[str] = None,
-    dummy=True,
-    no_warnings=True,
-) -> typing.Union[Lm, Lmer]:
-    if not "|" in formula:
-        if dummy:
-            data["dummy"] = "0"
-            data.at[data.index[0], "dummy"] = "1"
-            formula += "+(1|dummy)"
-        else:
-            mod = Lm(formula, data)
-            mod.fit(cluster=data[system_id], verbose=False, summarize=False)
-            return mod
-    model = Lmer(
-        formula=formula,
-        data=data,
-    )
-    factors = {system_id: list(data[system_id].unique())}
-    if factor:
-        factors[factor] = list(data[factor].unique())
-    if factor_list:
-        for factor in factor_list:
-            factors[factor] = list(data[factor].unique())
-    model.fit(
-        factors=factors,
-        REML=False,
-        summarize=False,
-        verbose=False,
-        no_warnings=no_warnings,
-    )
-    return model
-
-
-def benchmark_clustering(
-    dataset: pd.DataFrame,
-    algorithm_var: str,
-    algorithms: typing.Tuple[str, str],
-    benchmark_var: str,
-    metafeature_var: str,
-    loss_var: str,
-    fidelity: str,
-    path: str = None,
-):
-    dataset["benchmark_variant"] = dataset.apply(
-        lambda x: f"{x[benchmark_var]} x {x[metafeature_var]}", axis=1
-    )
-    dataset = dataset.loc[dataset[algorithm_var].isin(algorithms)]
-    benchmark = "benchmark_variant"
-    wins_bench = pd.DataFrame()
-    full_wins = []
-    full_benchmarks = []
-    full_fidelities = []
-    for f_n, f in enumerate(dataset[fidelity].unique()):
-        print(
-            f"{f:<{max([str(x) for x in dataset[fidelity].unique()],key=len)}} ({f_n+1}/{len(dataset[fidelity].unique())})",
-            end="\r",
-            flush=True,
-        )
-        wins_budget = []
-        for bench in dataset[benchmark].unique():
-            if (
-                len(dataset.loc[(dataset[fidelity] == f) & (dataset[benchmark] == bench)])
-                == 0
-            ):
-                continue
-            full_fidelities.append(f)
-            mod = model(
-                f"{loss_var}~{algorithm_var}",
-                dataset.loc[(dataset[fidelity] == f) & (dataset[benchmark] == bench)],
-                algorithm_var,
-            )
-            post_hocs = mod.post_hoc(algorithm_var)
-            if post_hocs[1].Sig[0] in ["***", "**", "*"]:
-                wins_budget.append(
-                    -1
-                    if post_hocs[1]
-                    .Contrast[0]
-                    .rsplit(" - ")[0 if post_hocs[1].Estimate[0] < 0 else 1]
-                    == algorithms[0]
-                    else 1
-                )
-                full_wins.append(
-                    -1
-                    if post_hocs[1]
-                    .Contrast[0]
-                    .rsplit(" - ")[0 if post_hocs[1].Estimate[0] < 0 else 1]
-                    == algorithms[0]
-                    else 1
-                )
-            else:
-                wins_budget.append(0)
-                full_wins.append(0)
-            full_benchmarks.append(bench)
-    wins_bench[benchmark] = full_benchmarks
-    wins_bench["wins"] = full_wins
-    wins_bench["fidelity"] = full_fidelities
-    wins_bench["wins"] = wins_bench["wins"].astype(float)
-    wins_bench[benchmark] = wins_bench[benchmark].astype(str)
-    wins_bench[["benchmark", "metafeature"]] = wins_bench.apply(
-        lambda x: pd.Series(x[benchmark].rsplit(" x ", 1)), axis=1
-    )
-    if path:
-        path = path if path.endswith(".parquet") else path + ".parquet"
-        wins_bench.to_parquet(path)
-    return wins_bench
-
-
-def get_sorted_rank_groups(result, reverse):
-    if reverse:
-        names = result.rankdf.iloc[::-1].index.to_list()
-        if result.cd is not None:
-            sorted_ranks = result.rankdf.iloc[::-1].meanrank
-            critical_difference = result.cd
-        else:
-            sorted_ranks = result.rankdf.iloc[::-1].meanrank
-            critical_difference = (
-                result.rankdf.ci_upper[0] - result.rankdf.ci_lower[0]
-            ) / 2
-    else:
-        names = result.rankdf.index.to_list()
-        if result.cd is not None:
-            sorted_ranks = result.rankdf.meanrank
-            critical_difference = result.cd
-        else:
-            sorted_ranks = result.rankdf.meanrank
-            critical_difference = (
-                result.rankdf.ci_upper[0] - result.rankdf.ci_lower[0]
-            ) / 2
-
-    groups = []
-    cur_max_j = -1
-    for i, _ in enumerate(sorted_ranks):
-        max_j = None
-        for j in range(i + 1, len(sorted_ranks)):
-            if abs(sorted_ranks[i] - sorted_ranks[j]) <= critical_difference:
-                max_j = j
-                # print(i, j)
-        if max_j is not None and max_j > cur_max_j:
-            cur_max_j = max_j
-            groups.append((i, max_j))
-    return sorted_ranks, names, groups
-
-
-class RankResult(
-    namedtuple(
-        "RankResult",
-        (
-            "rankdf",
-            "pvalue",
-            "cd",
-            "omnibus",
-            "posthoc",
-            "all_normal",
-            "pvals_shapiro",
-            "homoscedastic",
-            "pval_homogeneity",
-            "homogeneity_test",
-            "alpha",
-            "alpha_normality",
-            "num_samples",
-            "posterior_matrix",
-            "decision_matrix",
-            "rope",
-            "rope_mode",
-            "effect_size",
-            "force_mode",
-        ),
-    )
-):
-    __slots__ = ()
-
-    def __str__(self):
-        return (
-            "RankResult(rankdf=\n%s\n"
-            "pvalue=%s\n"
-            "cd=%s\n"
-            "omnibus=%s\n"
-            "posthoc=%s\n"
-            "all_normal=%s\n"
-            "pvals_shapiro=%s\n"
-            "homoscedastic=%s\n"
-            "pval_homogeneity=%s\n"
-            "homogeneity_test=%s\n"
-            "alpha=%s\n"
-            "alpha_normality=%s\n"
-            "num_samples=%s\n"
-            "posterior_matrix=\n%s\n"
-            "decision_matrix=\n%s\n"
-            "rope=%s\n"
-            "rope_mode=%s\n"
-            "effect_size=%s\n"
-            "force_mode=%s)"
-            % (
-                self.rankdf,
-                self.pvalue,
-                self.cd,
-                self.omnibus,
-                self.posthoc,
-                self.all_normal,
-                self.pvals_shapiro,
-                self.homoscedastic,
-                self.pval_homogeneity,
-                self.homogeneity_test,
-                self.alpha,
-                self.alpha_normality,
-                self.num_samples,
-                self.posterior_matrix,
-                self.decision_matrix,
-                self.rope,
-                self.rope_mode,
-                self.effect_size,
-                self.force_mode,
-            )
-        )
+ALGORITHM = "algorithm"
+VALUE = "value"
+SEED = "seed"
+BUDGET = "used_fidelity"
+BENCHMARK = "benchmark"
 
 
 def cd_diagram(
@@ -342,12 +89,16 @@ def cd_diagram(
         # p_hsd=1-studentized_range.cdf(t_stat*np.sqrt(2), k=len(estimates), df=contrasts.DF[0])
         hsd = [
             (
-                studentized_range.ppf(1 - 0.05, k=len(estimates), df=contrasts.DF.min())
+                stats.studentized_range.ppf(
+                    1 - 0.05, k=len(estimates), df=contrasts.DF.min()
+                )
                 / np.sqrt(2)
                 * contrasts.SE.min()
             ),
             (
-                studentized_range.ppf(1 - 0.05, k=len(estimates), df=contrasts.DF.max())
+                stats.studentized_range.ppf(
+                    1 - 0.05, k=len(estimates), df=contrasts.DF.max()
+                )
                 / np.sqrt(2)
                 * contrasts.SE.max()
             ),
@@ -523,334 +274,528 @@ def cd_diagram(
         return fig_cd
 
 
-def ci_plot(result, reverse, width, system_id="algorithm", ax=None, title=None):
+def dataframe_validator(
+    data: pd.DataFrame,
+    algorithm_var: str = ALGORITHM,
+    benchmark_var: str = BENCHMARK,
+    loss_var: str = VALUE,
+    fidelity_var: str = BUDGET,
+    seed_var: str = SEED,
+    **extra_vars,
+) -> typing.Tuple[pd.DataFrame, list[str]]:
     """
-    Uses error bars to create a plot of the confidence intervals of the mean value.
+    Validates the columns of a pandas DataFrame and converts them to the appropriate data types if necessary.
+
+    Args:
+        data (pd.DataFrame): The input DataFrame to be validated.
+
+    Returns:
+        tuple: A tuple containing the validated DataFrame and a list of valid column names.
+
+    Raises:
+        None
+
+    Examples:
+        >>> df = pd.DataFrame({'ALGORITHM': ['A', 'B', 'C'],
+        ...                    'SEED': [1, 2, 3],
+        ...                    'BENCHMARK': ['X', 'Y', 'Z'],
+        ...                    'VALUE': [0.1, 0.2, 0.3],
+        ...                    'BUDGET': [100, 200, 300]})
+        >>> dataframe_validator(df)
+        (  ALGORITHM  SEED BENCHMARK  VALUE  BUDGET
+        0         A     1         X    0.1   100.0
+        1         B     2         Y    0.2   200.0
+        2         C     3         Z    0.3   300.0,
+        ['ALGORITHM', 'SEED', 'BENCHMARK', 'VALUE', 'BUDGET'])
     """
-    if (
-        not isinstance(result, tuple)
-        or len(result) != 2
-        or not all(isinstance(df, pd.DataFrame) for df in result)
-    ):
-        result_copy = RankResult(**result._asdict())
-        result_copy = result_copy._replace(
-            rankdf=result.rankdf.sort_values(by="meanrank")
-        )
-        sorted_ranks, names, groups = get_sorted_rank_groups(result_copy, reverse)
-        sorted_means = sorted_df.meanrank
-        ci_lower = sorted_df.ci_lower
-        ci_upper = sorted_df.ci_upper
-        names = sorted_df.index
-        alpha = result.alpha
-        if reverse:
-            sorted_df = result.rankdf.iloc[::-1]
-        else:
-            print(result)
-        sorted_df = result.rankdf
-        height = len(sorted_df)
-        # cd = [result.cd]
-
-    else:
-        print("LMEM")
-        result = list(result)
-        estimates = result[0].set_index(system_id)
-        estimates = estimates.sort_values(by="Estimate")
-        sorted_ranks = pd.DataFrame()
-        sorted_ranks = estimates["Estimate"]
-        sorted_ranks.name = "meanrank"
-        estimates["ci_upper"] = estimates["2.5_ci"]
-        estimates["ci_lower"] = estimates["97.5_ci"]
-        names = estimates.index.values.tolist()
-        names_con = [name if "+" not in name else f"({name})" for name in names]
-        contrasts = result[1]
-        for pair in contrasts["Contrast"]:
-            sys_1 = pair.split(" - ")[0]
-            sys_2 = pair.split(" - ")[1]
-            contrasts.loc[contrasts["Contrast"] == pair, f"{system_id}_1"] = (
-                sys_1 if sys_1[0] != "(" or sys_1[-1] != ")" else sys_1[1:-1]
-            )
-            contrasts.loc[contrasts["Contrast"] == pair, f"{system_id}_2"] = (
-                sys_2 if sys_2[0] != "(" or sys_2[-1] != ")" else sys_2[1:-1]
-            )
-        contrasts = contrasts.drop("Contrast", axis=1)
-        column = contrasts.pop(f"{system_id}_2")
-        contrasts.insert(0, f"{system_id}_2", column)
-        column = contrasts.pop(f"{system_id}_1")
-        contrasts.insert(0, f"{system_id}_1", column)
-        groups = []
-        for _, row in contrasts.iterrows():
-            algos = (row[f"{system_id}_1"], row[f"{system_id}_2"])
-            if row["P-val"] > 0.05:
-                group = [names_con.index(algos[0]), names_con.index(algos[1])]
-                group.sort()
-                groups.append((group[0], group[1]))
-        new_groups = []
-        for group in groups:
-            if not any(
-                group[0] >= g[0] and group[1] <= g[1] and group != g for g in groups
-            ):
-                new_groups.append(group)
-        groups = new_groups
-        # t_stat=max(abs(contrasts.Estimate.min()),abs(contrasts.Estimate.min()))/contrasts.SE.min()
-        # p_hsd=1-studentized_range.cdf(t_stat*np.sqrt(2), k=len(estimates), df=contrasts.DF[0])
-        # hsd = [
-        #     (
-        #         studentized_range.ppf(1 - 0.05, k=len(estimates), df=contrasts.DF.min())
-        #         / np.sqrt(2)
-        #         * contrasts.SE.min()
-        #     ),
-        #     (
-        #         studentized_range.ppf(1 - 0.05, k=len(estimates), df=contrasts.DF.max())
-        #         / np.sqrt(2)
-        #         * contrasts.SE.max()
-        #     ),
-        # ]
-
-        sorted_means = sorted_ranks
-        ci_lower = estimates.ci_lower
-        ci_upper = estimates.ci_upper
-        names = names
-        alpha = 0.05
-
-        height = len(sorted_ranks)
-
-    if ax is None:
-        fig = plt.figure(figsize=(width, height))
-        fig.set_facecolor("white")
-        ax = plt.gca()
-    ax.errorbar(
-        sorted_means,
-        range(len(sorted_means)),
-        xerr=abs((ci_upper[0] - ci_lower[0]) / 4),
-        marker="o",
-        linestyle="None",
-        color="k",
-        ecolor="k",
-    )
-    ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(list(names))
-    if title:
-        ax.set_title(title)
-    else:
-        ax.set_title("%.1f%% Confidence Intervals of the Mean" % ((1 - alpha) * 100))
-    return ax
-
-
-class model_builder:
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        loss_var: str = "value",
-        system_var="algorithm",
-        benchmark_var="benchmark",
-    ):
-        self.df = df
-        self.loss_formula = f"{loss_var} ~ "
-        self.exploratory_var = system_var
-        self.benchmark_var = benchmark_var
-
-    def test_seed_dependency(self, verbose: bool = True):
-        simpel_model = model(
-            formula=f"{self.loss_formula}+{self.exploratory_var}",
-            data=self.df,
-            factor_list=[self.exploratory_var],
-            dummy=False,
-            no_warnings=True,
-        )
-        seed_model = model(
-            formula=f"{self.loss_formula}+(0+{self.exploratory_var}|seed)",
-            data=self.df,
-            factor_list=[self.exploratory_var],
-            dummy=False,
-            no_warnings=True,
-        )
-        test_result = glrt(
-            simpel_model,
-            seed_model,
-            names=["Simple model", "Model with Seed-effect"] if verbose else None,
-            returns=True,
-        )
-        if test_result["p"] < 0.05 and seed_model.logLike > simpel_model.logLike:
-            ranef_var = seed_model.ranef_var
-            influenced = ranef_var.loc[
-                (ranef_var["Var"] / 10 >= ranef_var["Var"].min())
-                & (ranef_var.index != "Residual")
-                & (ranef_var["Var"] * 10 >= ranef_var["Var"].max())
-            ]["Name"].to_list()
-            influenced = [x.rsplit(self.exploratory_var, 1)[1] for x in influenced]
-            print(
-                f"Seed is a significant effect, likely influenced algorithms: {influenced}"
-            )
-            return influenced
-        else:
-            print("=> Seed is not a significant effect")
-            return []
-
-    def test_benchmark_information(
-        self, rank_benchmarks: bool = False, verbose: bool = True
-    ):
-        test_results = {}
-        benchmark_info = {}
-        for benchmark in self.df[self.benchmark_var].unique():
-            simple_mod = model(
-                formula=f"{self.loss_formula}1",
-                data=self.df.loc[self.df[self.benchmark_var] == benchmark],
-                factor_list=[self.exploratory_var],
-                dummy=False,
-                no_warnings=True,
-            )
-            benchmark_mod = model(
-                formula=f"{self.loss_formula}{self.exploratory_var}",
-                data=self.df.loc[self.df[self.benchmark_var] == benchmark],
-                factor_list=[self.exploratory_var],
-                dummy=False,
-                no_warnings=True,
-            )
-            if verbose:
-                print(f"\nBenchmark: {benchmark}")
-            test_results[benchmark] = glrt(
-                simple_mod,
-                benchmark_mod,
-                names=["Simple model", "Model with Algorithm-effect"]
-                if verbose
-                else None,
-                returns=True,
-            )
-            if (
-                test_results[benchmark]["p"] < 0.05
-                and benchmark_mod.logLike > simple_mod.logLike
-            ):
-                print(
-                    f"=> Benchmark {benchmark:<{max([len(x) for x in self.df[self.benchmark_var].unique()])}} is informative."
-                )
-                benchmark_info[benchmark] = True
+    cols = data.dtypes
+    valid_columns = []
+    for col in [algorithm_var, seed_var, benchmark_var]:
+        if col in data.columns:
+            if cols[col] != "object":
+                try:
+                    data[col] = data[col].astype(object)
+                    valid_columns.append(col)
+                    print(f"Converted column {col} to object.")
+                except Exception as e:
+                    print(
+                        f"Error {e}: Column {col} is not of type object, could not convert all values to object."
+                    )
             else:
-                print(
-                    f"=> Benchmark {benchmark:<{max([len(x) for x in self.df[self.benchmark_var].unique()])}} is uninformative."
+                valid_columns.append(col)
+    for col in [loss_var, fidelity_var]:
+        if col in data.columns:
+            if not cols[col] in ["float", "int"]:
+                try:
+                    data[col] = data[col].astype(np.float64)
+                    valid_columns.append(col)
+                    print(f"Converted column {col} to float.")
+                except Exception as e:
+                    print(
+                        f"Error {e}: Column {col} is not numeric, could not convert all values to float."
+                    )
+            else:
+                valid_columns.append(col)
+    for _kw, col in extra_vars.items():
+        if is_numeric_dtype(data[col]):
+            data[col] = data[col].astype(np.float64)
+        else:
+            data[col] = data[col].astype(object)
+        valid_columns.append(col)
+    return data, valid_columns
+
+
+def glrt(mod1, mod2, verbose: bool = False) -> dict[str, typing.Any]:
+    """Generalized Likelihood Ratio Test on two Liner Mixed Effect Models from R
+
+    Args:
+        mod1 (Lmer): First, simple model, Null-Hypothesis assumes that this model contains not significantly less information as the second model
+        mod2 (Lmer): Second model, Alternative Hypothesis assumes that this model contains significant new information
+        verbose (bool, optional): Outputting of results. Defaults to False.
+
+    Returns:
+        dict[str,typing.Any]: Result dictionary with Chi-Square-Score, Degrees of Freedom and p-value of the test
+
+    Raises:
+        None
+
+    Examples:
+        >>> mod1 = model("value ~ algorithm + (1|seed)", data)
+        >>> mod2 = model("value ~ algorithm + (1|seed) + (1|benchmark)", data)
+        >>> glrt(mod1,mod2)
+        {'p': 0.0, 'chi_square': 7.0, 'df': 1}
+    """
+    assert (
+        mod1.logLike
+        and mod2.logLike
+        and mod1.coefs is not None
+        and mod2.coefs is not None
+    )
+    chi_square = 2 * abs(mod1.logLike - mod2.logLike)
+    delta_params = abs(len(mod1.coefs) - len(mod2.coefs))
+    p = 1 - stats.chi2.cdf(chi_square, df=delta_params)
+    if verbose:
+        print(
+            f"{mod1.formula} ({round(mod1.logLike,4)}) {'==' if p>0.05 or mod1.logLike==mod2.logLike else '>>' if mod1.logLike>mod2.logLike else '<<'} {mod2.formula} ({round(mod2.logLike,4)})"
+        )
+        print(f"Chi-Square: {chi_square}, P-Value: {p}")
+    return {
+        "p": p,
+        "chi_square": chi_square,
+        "df": delta_params,
+    }
+
+
+def model(
+    formula: str,
+    data: pd.DataFrame,
+    system_id: str = "algorithm",
+    factor: typing.Union[str, list[str]] = None,
+    dummy=True,
+    no_warnings=True,
+) -> typing.Union[Lm, Lmer]:
+    """
+    Model object for Linear (Mixed Effects) Model-based significance analysis.
+
+    Args:
+        formula (str): The formula specifying the regression model.
+        data (pd.DataFrame): The input data for the regression model.
+        system_id (str, optional): The column name in the data representing the system ID. Defaults to "algorithm".
+        factor (str or list[str], optional): The column name(s) in the data representing the factor(s) to include in the model. Defaults to None.
+        dummy (bool, optional): Whether to include a dummy variable in the model to enforce the use of an LMEM. Defaults to True.
+        no_warnings (bool, optional): Whether to suppress warnings during model fitting. Defaults to True.
+
+    Returns:
+        Union[Lm, Lmer]: The fitted regression model.
+
+    Raises:
+        None
+
+    Examples:
+        # Example 1: Perform linear regression
+        data = pd.DataFrame({'x': [1, 2, 3], 'y': [2, 4, 6]})
+        model('y ~ x', data)
+
+        # Example 2: Perform mixed-effects regression
+        data = pd.DataFrame({'x': [1, 2, 3], 'y': [2, 4, 6], 'group': ['A', 'B', 'A']})
+        model('y ~ x + (1|group)', data)
+    """
+
+    if not "|" in formula:
+        if dummy:
+            data["dummy"] = "0"
+            data.at[data.index[0], "dummy"] = "1"
+            formula += "+(1|dummy)"
+        else:
+            mod = Lm(formula, data)
+            mod.fit(cluster=data[system_id], verbose=False, summarize=False)
+            return mod
+    model = Lmer(
+        formula=formula,
+        data=data,
+    )
+    factors = {system_id: list(data[system_id].unique())}
+    if factor:
+        if isinstance(factor, str):
+            factors[factor] = list(data[factor].unique())
+        else:
+            for f in factor:
+                factors[f] = list(data[f].unique())
+    model.fit(
+        factors=factors,
+        REML=False,
+        summarize=False,
+        verbose=False,
+        no_warnings=no_warnings,
+    )
+    return model
+
+
+def metafeature_analysis(
+    dataset: pd.DataFrame,
+    algorithms: typing.Tuple[str, str],
+    metafeature_var: str,
+    algorithm_var: str = ALGORITHM,
+    benchmark_var: str = BENCHMARK,
+    loss_var: str = VALUE,
+    fidelity_var: str = BUDGET,
+    path: str = "",
+) -> typing.Tuple[matplotlib.figure.Figure, pd.DataFrame]:
+    """Metafeature analysis for a given dataset
+
+    Args:
+        dataset (pd.DataFrame): Dataset to be analyzed
+        algorithms (typing.Tuple[str, str]): Algorithms to be compared
+        metafeature_var (str): Metafeature to be analyzed
+        algorithm_var (str, optional): Algorithm variable. Defaults to ALGORITHM.
+        benchmark_var (str, optional): Benchmark variable. Defaults to BENCHMARK.
+        loss_var (str, optional): Loss variable. Defaults to VALUE.
+        fidelity_var (str, optional): Fidelity veriable. Defaults to BUDGET.
+        path (str, optional): Path to save significance scores. Defaults to "".
+
+    Raises:
+        ValueError: Error if the named algorithms are not in the dataset
+
+    Returns:
+        typing.Tuple[plt.figure, pd.DataFrame]: CD-diagram and dataframe with significance scores
+    """
+    dataset["benchmark_variant"] = dataset.apply(
+        lambda x: f"{x[benchmark_var]} x {x[metafeature_var]}", axis=1
+    )
+    dataset = dataset.loc[dataset[algorithm_var].isin(algorithms)]
+    dataset, cols = dataframe_validator(dataset, metafeature=metafeature_var)
+    if not all(
+        [
+            x in cols
+            for x in [
+                algorithm_var,
+                benchmark_var,
+                metafeature_var,
+                loss_var,
+                fidelity_var,
+            ]
+        ]
+    ):
+        raise ValueError("Not all necessary columns are included in the dataset")
+    benchmark = "benchmark_variant"
+    wins_bench = pd.DataFrame()
+    full_wins = []
+    full_benchmarks = []
+    full_fidelities = []
+    for f_n, f in enumerate(dataset[fidelity_var].unique()):
+        print(
+            f"{f:<{max([str(x) for x in dataset[fidelity_var].unique()],key=len)}} ({f_n+1}/{len(dataset[fidelity_var].unique())})",
+            end="\r",
+            flush=True,
+        )
+        wins_budget = []
+        for bench in dataset[benchmark].unique():
+            if (
+                len(
+                    dataset.loc[
+                        (dataset[fidelity_var] == f) & (dataset[benchmark] == bench)
+                    ]
                 )
-                benchmark_info[benchmark] = False
-
-        if rank_benchmarks:
-            all_benchmarks_mod = model(
-                formula=f"{self.loss_formula}(0+{self.benchmark_var}|{self.exploratory_var})",
-                data=self.df,
-                factor_list=[self.exploratory_var],
-                dummy=False,
+                == 0
+            ):
+                continue
+            full_fidelities.append(f)
+            mod = model(
+                f"{loss_var}~{algorithm_var}",
+                dataset.loc[(dataset[fidelity_var] == f) & (dataset[benchmark] == bench)],
+                algorithm_var,
             )
-            print("")
-            ranef_var = all_benchmarks_mod.ranef_var[:-1]
+            assert isinstance(mod, Lmer)
+            post_hocs = mod.post_hoc(algorithm_var)
+            if post_hocs[1].Sig[0] in ["***", "**", "*"]:
+                wins_budget.append(
+                    -1
+                    if post_hocs[1]
+                    .Contrast[0]
+                    .rsplit(" - ")[0 if post_hocs[1].Estimate[0] < 0 else 1]
+                    == algorithms[0]
+                    else 1
+                )
+                full_wins.append(
+                    -1
+                    if post_hocs[1]
+                    .Contrast[0]
+                    .rsplit(" - ")[0 if post_hocs[1].Estimate[0] < 0 else 1]
+                    == algorithms[0]
+                    else 1
+                )
+            else:
+                wins_budget.append(0)
+                full_wins.append(0)
+            full_benchmarks.append(bench)
+    wins_bench[benchmark] = full_benchmarks
+    wins_bench["wins"] = full_wins
+    wins_bench["fidelity"] = full_fidelities
+    wins_bench["wins"] = wins_bench["wins"].astype(float)
+    wins_bench[benchmark] = wins_bench[benchmark].astype(str)
+    wins_bench[["benchmark", "metafeature"]] = wins_bench.apply(
+        lambda x: pd.Series(x[benchmark].rsplit(" x ", 1)), axis=1
+    )
+    if path:
+        path = path if path.endswith(".parquet") else path + ".parquet"
+        wins_bench.to_parquet(path)
+    print(wins_bench.head(5))
+    wins_model = model("wins~benchmark_variant+fidelity", wins_bench, "benchmark_variant")
+    assert isinstance(wins_model, Lmer)
+    fig = plt.figure(
+        cd_diagram(
+            wins_model.post_hoc("benchmark_variant"),
+            system_id="benchmark_variant",
+            reverse=False,
+            width=5,
+        )
+    )
 
-            def rename_var_name(row):
-                return row["Name"].rsplit(self.benchmark_var, 1)[1]
+    return fig, wins_bench
 
-            ranef_var["Name"] = ranef_var.apply(rename_var_name, axis=1)
-            print(ranef_var.reset_index(drop=True))
 
-            # Plot functionality is not useful for larger variations
+def seed_dependency_check(
+    data: pd.DataFrame,
+    algorithm_var: str = ALGORITHM,
+    loss_var: str = VALUE,
+    seed_var: str = SEED,
+    verbose: bool = True,
+) -> list[str]:
+    """Check for seed dependency in a dataset
 
-            # names, ranks = [ranef_var["Name"].to_list(), ranef_var["Var"].to_list()]
-            # x_pos = [0.2] * len(names)
-            # plt.figure(figsize=(0.4 + 0.1 * max(len(x) for x in names), 3))
-            # plt.scatter(x_pos, ranks, facecolors="none", edgecolors="black")
-            # for i, name in enumerate(names):
-            #     plt.text(
-            #         0.4,
-            #         ranks[i],
-            #         name,
-            #     )
-            # plt.ylabel("Variance")
-            # plt.title("Variance Ranking")
-            # plt.ylim(
-            #     min(ranks) - 0.1 * (max(ranks) - min(ranks)),
-            #     max(ranks) + 0.1 * (max(ranks) - min(ranks)),
-            # )
-            # plt.xlim(0, 0.5 + max(len(x) for x in names) / 10)
-            # plt.xticks([])
-            # plt.show()
-            uninformative = ranef_var.loc[
-                (ranef_var["Var"] * 10 <= ranef_var["Var"].max())
-                & (ranef_var.index != "Residual")
-                & (ranef_var["Var"] / 10 <= ranef_var["Var"].min())
-            ]["Name"].to_list()
-            print(
-                f"Benchmarks without algorithm variation: {[x.rsplit(self.benchmark_var,1)[0] for x in uninformative]}"
-            )
-            return benchmark_info, ranef_var
-        return benchmark_info
+    Args:
+        data (pd.DataFrame): Dataset to be analyzed
+        algorithm_var (str, optional): Algorithm variable. Defaults to ALGORITHM.
+        loss_var (str, optional): Loss variable. Defaults to VALUE.
+        seed_var (str, optional): Seed variable. Defaults to SEED.
+        verbose (bool, optional): Verbosity of check. Defaults to True.
 
-    def test_fidelity(self, fidelity_var: str, verbose: bool = True):
-        significances = {fidelity_var: 0, f"{fidelity_var}_group": 0}
-        simple_formula = f"{self.loss_formula} {self.exploratory_var}{f' + (1|{self.benchmark_var})' if self.df[self.benchmark_var].nunique()>1 else ''}"
+    Returns:
+        list[str]: Algorithms that are likely influenced by the seed
+    """
+    simple_model = model(
+        formula=f"{loss_var}~{algorithm_var}",
+        data=data,
+        dummy=False,
+        no_warnings=True,
+    )
+    seed_model = model(
+        formula=f"{loss_var}~(0+{algorithm_var}|{seed_var})",
+        data=data,
+        dummy=False,
+        no_warnings=True,
+    )
+    test_result = glrt(
+        simple_model,
+        seed_model,
+        verbose,
+    )
+    assert (
+        simple_model.logLike
+        and seed_model.logLike
+        and seed_model.ranef is not None
+        and test_result
+    )
+    if test_result["p"] < 0.05 and seed_model.logLike > simple_model.logLike:
+        ranef_var = seed_model.ranef_var
+        influenced = ranef_var.loc[
+            (ranef_var["Var"] / 10 >= ranef_var["Var"].min())
+            & (ranef_var.index != "Residual")
+            & (ranef_var["Var"] * 10 >= ranef_var["Var"].max())
+        ]["Name"].to_list()
+        influenced = [x.rsplit(algorithm_var, 1)[1] for x in influenced]
+        print(f"Seed is a significant effect, likely influenced algorithms: {influenced}")
+        return influenced
+    else:
+        print("=> Seed is not a significant effect")
+        return []
+
+
+def benchmark_information_check(
+    data: pd.DataFrame,
+    algorithm_var: str = ALGORITHM,
+    benchmark_var: str = BENCHMARK,
+    loss_var: str = VALUE,
+    rank_benchmarks: bool = False,
+    verbose: bool = True,
+) -> typing.Union[dict[str, bool], typing.Tuple[dict[str, bool], pd.DataFrame]]:
+    """Benchmark-wise check for variation between algorithms in a dataset.
+
+    Args:
+        data (pd.DataFrame): Dataset to be analyzed
+        algorithm_var (str, optional): Algorithm variable. Defaults to ALGORITHM.
+        benchmark_var (str, optional): Benchmark variable. Defaults to BENCHMARK.
+        loss_var (str, optional): Loss variable. Defaults to VALUE.
+        rank_benchmarks (bool, optional): Ranking benchmarks (involves calculating the individual random effects - takes time!). Defaults to False.
+        verbose (bool, optional): Verbosity of the check. Defaults to True.
+
+    Returns:
+        typing.Union[dict[str, bool], typing.Tuple[dict[str, bool], pd.DataFrame]]: Informativeness of benchmarks and random effects if rank_benchmarks is True
+    """
+    test_results = {}
+    benchmark_info = {}
+    for benchmark in data[benchmark_var].unique():
         simple_mod = model(
-            formula=simple_formula,
-            data=self.df,
-            factor_list=[self.exploratory_var],
-            dummy=self.df[self.benchmark_var].nunique() == 1,
+            formula=f"{loss_var}~1",
+            data=data.loc[data[benchmark_var] == benchmark],
+            # factor_list=[self.exploratory_var],
+            dummy=False,
             no_warnings=True,
         )
-        fidelity_mod = model(
-            formula=f"{simple_formula} + {fidelity_var}",
-            data=self.df,
-            factor_list=[self.exploratory_var],
-            dummy=self.df[self.benchmark_var].nunique() == 1,
+        benchmark_mod = model(
+            formula=f"{loss_var}~{algorithm_var}",
+            data=data.loc[data[benchmark_var] == benchmark],
+            # factor_list=[self.exploratory_var],
+            dummy=False,
             no_warnings=True,
         )
-        test_result = glrt(
+        if verbose:
+            print(f"\nBenchmark: {benchmark}")
+        test_results[benchmark] = glrt(
             simple_mod,
+            benchmark_mod,
+            verbose,
+        )
+        assert benchmark_mod.logLike and simple_mod.logLike
+        if (
+            test_results[benchmark]["p"] < 0.05
+            and benchmark_mod.logLike > simple_mod.logLike
+        ):
+            print(
+                f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is informative."
+            )
+            benchmark_info[benchmark] = True
+        else:
+            print(
+                f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is uninformative."
+            )
+            benchmark_info[benchmark] = False
+
+    if rank_benchmarks:
+        all_benchmarks_mod = model(
+            formula=f"{loss_var}(0+{benchmark_var}|{algorithm_var})",
+            data=data,
+            # factor_list=[self.exploratory_var],
+            dummy=False,
+        )
+        print("")
+        ranef_var = all_benchmarks_mod.ranef_var[:-1]
+
+        def rename_var_name(row):
+            return row["Name"].rsplit(benchmark_var, 1)[1]
+
+        ranef_var["Name"] = ranef_var.apply(rename_var_name, axis=1)
+        print(ranef_var.reset_index(drop=True))
+        uninformative = ranef_var.loc[
+            (ranef_var["Var"] * 10 <= ranef_var["Var"].max())
+            & (ranef_var.index != "Residual")
+            & (ranef_var["Var"] / 10 <= ranef_var["Var"].min())
+        ]["Name"].to_list()
+        print(
+            f"Benchmarks without algorithm variation: {[x.rsplit(benchmark_var,1)[0] for x in uninformative]}"
+        )
+        return benchmark_info, ranef_var
+    return benchmark_info
+
+
+def fidelity_check(
+    data: pd.DataFrame,
+    fidelity_var: str = BUDGET,
+    algorithm_var: str = ALGORITHM,
+    benchmark_var: str = BENCHMARK,
+    loss_var: str = VALUE,
+    verbose: bool = True,
+) -> None:
+    """Check for the significance of a fidelity variable in a dataset
+
+    Args:
+        data (pd.DataFrame): Dataset to be analyzed
+        fidelity_var (str, optional): Fidelity variable. Defaults to BUDGET.
+        algorithm_var (str, optional): Algorithm variable. Defaults to ALGORITHM.
+        benchmark_var (str, optional): Benchmark variable. Defaults to BENCHMARK.
+        loss_var (str, optional): Loss variable. Defaults to VALUE.
+        verbose (bool, optional): Verbosity of the check. Defaults to True.
+    """
+    significances = {}
+    simple_formula = f"{loss_var} ~ {algorithm_var}{f' + (1|{benchmark_var})' if data[benchmark_var].nunique()>1 else ''}"
+    simple_mod = model(
+        formula=simple_formula,
+        data=data,
+        # factor_list=[self.exploratory_var],
+        dummy=data[benchmark_var].nunique() == 1,
+        no_warnings=True,
+    )
+    fidelity_mod = model(
+        formula=f"{simple_formula} + {fidelity_var}",
+        data=data,
+        # factor_list=[self.exploratory_var],
+        dummy=data[benchmark_var].nunique() == 1,
+        no_warnings=True,
+    )
+    test_result = glrt(
+        simple_mod,
+        fidelity_mod,
+        verbose,
+    )
+    if verbose:
+        print("")
+    assert fidelity_mod.logLike and simple_mod.logLike
+    if test_result["p"] < 0.05 and fidelity_mod.logLike > simple_mod.logLike:
+        significances[fidelity_var] = 1
+    fid_group_mod = model(
+        formula=f"{simple_formula}+ {algorithm_var}:{fidelity_var}",
+        data=data,
+        # factor_list=[self.exploratory_var],
+        dummy=data[benchmark_var].nunique() == 1,
+    )
+    test_result = glrt(
+        simple_mod,
+        fid_group_mod,
+        verbose,
+    )
+    if test_result["p"] < 0.05 and fid_group_mod.logLike > simple_mod.logLike:
+        significances[f"{fidelity_var}_group"] = 1
+    if significances[fidelity_var] == 1 and significances[f"{fidelity_var}_group"] == 1:
+        if verbose:
+            print("")
+        test_result = glrt(
             fidelity_mod,
-            names=["Simple model", "Model with Fidelity-effect"] if verbose else None,
-            returns=True,
+            fid_group_mod,
+            verbose,
         )
         if verbose:
             print("")
-        if test_result["p"] < 0.05 and fidelity_mod.logLike > simple_mod.logLike:
-            significances[fidelity_var] = 1
-        fid_group_mod = model(
-            formula=f"{simple_formula} + {self.exploratory_var}:{fidelity_var}",
-            data=self.df,
-            factor_list=[self.exploratory_var],
-            dummy=self.df[self.benchmark_var].nunique() == 1,
-        )
-        test_result = glrt(
-            simple_mod,
-            fid_group_mod,
-            names=["Simple model", "Model with Fidelity-interaction-effect"]
-            if verbose
-            else None,
-            returns=True,
-        )
-        if test_result["p"] < 0.05 and fid_group_mod.logLike > simple_mod.logLike:
-            significances[f"{fidelity_var}_group"] = 1
-        if (
-            significances[fidelity_var] == 1
-            and significances[f"{fidelity_var}_group"] == 1
-        ):
-            if verbose:
-                print("")
-            test_result = glrt(
-                fidelity_mod,
-                fid_group_mod,
-                names=[
-                    "Model with Fidelity-effect",
-                    "Model with Fidelity-interaction-effect",
-                ]
-                if verbose
-                else None,
-                returns=True,
+        if test_result["p"] < 0.05 and fid_group_mod.logLike > fidelity_mod.logLike:
+            print(
+                f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but interaction effect performs better."
             )
-            if verbose:
-                print("")
-            if test_result["p"] < 0.05 and fid_group_mod.logLike > fidelity_mod.logLike:
-                print(
-                    f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but interaction effect performs better."
-                )
-            else:
-                print(
-                    f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but as simple effect performs better."
-                )
-        elif significances[fidelity_var] == 1:
-            print(f"=> Fidelity {fidelity_var} as simple effect is significant.")
-        elif significances[f"{fidelity_var}_group"] == 1:
-            print(f"=>  Fidelity {fidelity_var} as interaction effect is significant.")
         else:
-            print(f"=> Fidelity {fidelity_var} is not a significant effect.")
+            print(
+                f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but as simple effect performs better."
+            )
+    elif significances[fidelity_var] == 1:
+        print(f"=> Fidelity {fidelity_var} as simple effect is significant.")
+    elif significances[f"{fidelity_var}_group"] == 1:
+        print(f"=>  Fidelity {fidelity_var} as interaction effect is significant.")
+    else:
+        print(f"=> Fidelity {fidelity_var} is not a significant effect.")
