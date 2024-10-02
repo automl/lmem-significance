@@ -10,6 +10,8 @@ from pandas.api.types import is_numeric_dtype
 from pymer4.models import Lm, Lmer
 from scipy import stats
 
+pd.options.mode.chained_assignment = None
+
 ALGORITHM = "algorithm"
 VALUE = "value"
 SEED = "seed"
@@ -281,6 +283,7 @@ def dataframe_validator(
     loss_var: str = VALUE,
     fidelity_var: str = BUDGET,
     seed_var: str = SEED,
+    verbose: bool = True,
     **extra_vars,
 ) -> typing.Tuple[pd.DataFrame, list[str]]:
     """
@@ -288,6 +291,13 @@ def dataframe_validator(
 
     Args:
         data (pd.DataFrame): The input DataFrame to be validated.
+        algorithm_var (str, optional): The name of the column containing the algorithm names. Defaults to 'ALGORITHM'.
+        benchmark_var (str, optional): The name of the column containing the benchmark names. Defaults to 'BENCHMARK'.
+        loss_var (str, optional): The name of the column containing the loss values. Defaults to 'VALUE'.
+        fidelity_var (str, optional): The name of the column containing the fidelity values. Defaults to 'BUDGET'.
+        seed_var (str, optional): The name of the column containing the seed values. Defaults to 'SEED'.
+        verbose (bool, optional): Whether to print conversion messages. Defaults to True.
+        **extra_vars: Additional columns to be validated.
 
     Returns:
         tuple: A tuple containing the validated DataFrame and a list of valid column names.
@@ -316,7 +326,8 @@ def dataframe_validator(
                 try:
                     data[col] = data[col].astype(object)
                     valid_columns.append(col)
-                    print(f"Converted column {col} to object.")
+                    if verbose:
+                        print(f"Converted column {col} to object.")
                 except Exception as e:
                     print(
                         f"Error {e}: Column {col} is not of type object, could not convert all values to object."
@@ -329,7 +340,8 @@ def dataframe_validator(
                 try:
                     data[col] = data[col].astype(np.float64)
                     valid_columns.append(col)
-                    print(f"Converted column {col} to float.")
+                    if verbose:
+                        print(f"Converted column {col} to float.")
                 except Exception as e:
                     print(
                         f"Error {e}: Column {col} is not numeric, could not convert all values to float."
@@ -423,7 +435,7 @@ def model(
 
     if not "|" in formula:
         if dummy:
-            data["dummy"] = "0"
+            data.loc[:,"dummy"] = "0"
             data.at[data.index[0], "dummy"] = "1"
             formula += "+(1|dummy)"
         else:
@@ -460,6 +472,8 @@ def metafeature_analysis(
     loss_var: str = VALUE,
     fidelity_var: str = BUDGET,
     path: str = "",
+    plot: bool = False,
+    verbose: bool = True,
 ) -> typing.Tuple[matplotlib.figure.Figure, pd.DataFrame]:
     """Metafeature analysis for a given dataset
 
@@ -472,18 +486,20 @@ def metafeature_analysis(
         loss_var (str, optional): Loss variable. Defaults to VALUE.
         fidelity_var (str, optional): Fidelity veriable. Defaults to BUDGET.
         path (str, optional): Path to save significance scores. Defaults to "".
+        plot (bool, optional): Whether to plot the CD-diagram. Defaults to False.
+        verbose (bool, optional): Verbosity of the analysis. Defaults to True.
 
     Raises:
         ValueError: Error if the named algorithms are not in the dataset
 
     Returns:
-        typing.Tuple[plt.figure, pd.DataFrame]: CD-diagram and dataframe with significance scores
+        typing.Tuple[pd.DataFrame, pd.DataFrame]: DataFrame with scores and pairwise signficances
     """
     dataset["benchmark_variant"] = dataset.apply(
         lambda x: f"{x[benchmark_var]} x {x[metafeature_var]}", axis=1
     )
     dataset = dataset.loc[dataset[algorithm_var].isin(algorithms)]
-    dataset, cols = dataframe_validator(dataset, metafeature=metafeature_var)
+    dataset, cols = dataframe_validator(dataset, fidelity_var=fidelity_var ,metafeature=metafeature_var, verbose=verbose)
     if not all(
         [
             x in cols
@@ -503,11 +519,12 @@ def metafeature_analysis(
     full_benchmarks = []
     full_fidelities = []
     for f_n, f in enumerate(dataset[fidelity_var].unique()):
-        print(
-            f"{f:<{max([str(x) for x in dataset[fidelity_var].unique()],key=len)}} ({f_n+1}/{len(dataset[fidelity_var].unique())})",
-            end="\r",
-            flush=True,
-        )
+        if verbose:
+            print(
+                f"{f:<{max([str(x) for x in dataset[fidelity_var].unique()],key=len)}} ({f_n+1}/{len(dataset[fidelity_var].unique())})",
+                end="\r",
+                flush=True,
+            )
         wins_budget = []
         for bench in dataset[benchmark].unique():
             if (
@@ -559,19 +576,22 @@ def metafeature_analysis(
     if path:
         path = path if path.endswith(".parquet") else path + ".parquet"
         wins_bench.to_parquet(path)
-    print(wins_bench.head(5))
+    if verbose:
+        print(wins_bench.head(5))
     wins_model = model("wins~benchmark_variant+fidelity", wins_bench, "benchmark_variant")
     assert isinstance(wins_model, Lmer)
-    fig = plt.figure(
-        cd_diagram(
-            wins_model.post_hoc("benchmark_variant"),
-            system_id="benchmark_variant",
-            reverse=False,
-            width=5,
+    metafeatures_significances = wins_model.post_hoc("benchmark_variant")
+    if plot:
+        plt.figure(
+            cd_diagram(
+                metafeatures_significances,
+                system_id="benchmark_variant",
+                reverse=False,
+                width=5,
+            )
         )
-    )
 
-    return fig, wins_bench
+    return metafeatures_significances
 
 
 def seed_dependency_check(
@@ -624,10 +644,12 @@ def seed_dependency_check(
             & (ranef_var["Var"] * 10 >= ranef_var["Var"].max())
         ]["Name"].to_list()
         influenced = [x.rsplit(algorithm_var, 1)[1] for x in influenced]
-        print(f"Seed is a significant effect, likely influenced algorithms: {influenced}")
+        if verbose:
+            print(f"Seed is a significant effect, likely influenced algorithms: {influenced}")
         return influenced
     else:
-        print("=> Seed is not a significant effect")
+        if verbose:
+            print("=> Seed is not a significant effect")
         return []
 
 
@@ -681,14 +703,16 @@ def benchmark_information_check(
             test_results[benchmark]["p"] < 0.05
             and benchmark_mod.logLike > simple_mod.logLike
         ):
-            print(
-                f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is informative."
-            )
+            if verbose:
+                print(
+                    f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is informative."
+                )
             benchmark_info[benchmark] = True
         else:
-            print(
-                f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is uninformative."
-            )
+            if verbose:
+                print(
+                    f"=> Benchmark {benchmark:<{max([len(x) for x in data[benchmark_var].unique()])}} is uninformative."
+                )
             benchmark_info[benchmark] = False
 
     if rank_benchmarks:
@@ -698,22 +722,25 @@ def benchmark_information_check(
             # factor_list=[self.exploratory_var],
             dummy=False,
         )
-        print("")
+        if verbose:
+            print("")
         ranef_var = all_benchmarks_mod.ranef_var[:-1]
 
         def rename_var_name(row):
             return row["Name"].rsplit(benchmark_var, 1)[1]
 
         ranef_var["Name"] = ranef_var.apply(rename_var_name, axis=1)
-        print(ranef_var.reset_index(drop=True))
+        if verbose:
+            print(ranef_var.reset_index(drop=True))
         uninformative = ranef_var.loc[
             (ranef_var["Var"] * 10 <= ranef_var["Var"].max())
             & (ranef_var.index != "Residual")
             & (ranef_var["Var"] / 10 <= ranef_var["Var"].min())
         ]["Name"].to_list()
-        print(
-            f"Benchmarks without algorithm variation: {[x.rsplit(benchmark_var,1)[0] for x in uninformative]}"
-        )
+        if verbose:
+            print(
+                f"Benchmarks without algorithm variation: {[x.rsplit(benchmark_var,1)[0] for x in uninformative]}"
+            )
         return benchmark_info, ranef_var
     return benchmark_info
 
@@ -762,6 +789,8 @@ def fidelity_check(
     assert fidelity_mod.logLike and simple_mod.logLike
     if test_result["p"] < 0.05 and fidelity_mod.logLike > simple_mod.logLike:
         significances[fidelity_var] = 1
+    else:
+        significances[fidelity_var] = 0
     fid_group_mod = model(
         formula=f"{simple_formula}+ {algorithm_var}:{fidelity_var}",
         data=data,
@@ -775,6 +804,8 @@ def fidelity_check(
     )
     if test_result["p"] < 0.05 and fid_group_mod.logLike > simple_mod.logLike:
         significances[f"{fidelity_var}_group"] = 1
+    else:
+        significances[f"{fidelity_var}_group"] = 0
     if significances[fidelity_var] == 1 and significances[f"{fidelity_var}_group"] == 1:
         if verbose:
             print("")
@@ -786,16 +817,48 @@ def fidelity_check(
         if verbose:
             print("")
         if test_result["p"] < 0.05 and fid_group_mod.logLike > fidelity_mod.logLike:
-            print(
-                f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but interaction effect performs better."
-            )
+            if verbose:
+                print(
+                    f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but interaction effect performs better."
+                )
+            return "interaction_effect"
         else:
-            print(
-                f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but as simple effect performs better."
-            )
+            if verbose:
+                print(
+                    f"=> Fidelity {fidelity_var} is both as simple and interaction effect significant, but as simple effect performs better."
+                )
+            return "simple_effect"
     elif significances[fidelity_var] == 1:
-        print(f"=> Fidelity {fidelity_var} as simple effect is significant.")
+        if verbose:
+            print(f"=> Fidelity {fidelity_var} as simple effect is significant.")
+        return "simple_effect"
     elif significances[f"{fidelity_var}_group"] == 1:
-        print(f"=>  Fidelity {fidelity_var} as interaction effect is significant.")
+        if verbose:
+            print(f"=>  Fidelity {fidelity_var} as interaction effect is significant.")
+        return "interaction_effect"
     else:
-        print(f"=> Fidelity {fidelity_var} is not a significant effect.")
+        if verbose:
+            print(f"=> Fidelity {fidelity_var} is not a significant effect.")
+        return "none"
+
+
+def convert_to_autorank(
+    data: pd.DataFrame,
+    algorithm_variable: str = "algorithm",
+    value_variable: str = "value"
+)->pd.DataFrame:
+    """Converts an LMEM-compatible-formatted dataframe to the format required by the autorank package.
+
+    Args:
+        data (pd.DataFrame): Dataframe to be converted.
+        algorithm_variable (str, optional): Algorithm variable (column names). Defaults to "algorithm".
+        value_variable (str, optional): Value variable (column entries). Defaults to "value".
+
+    Returns:
+        pd.DataFrame: _description_
+    """
+
+    df_autorank = pd.DataFrame()
+    for algo in data[algorithm_variable].unique():
+        df_autorank[algo] = -data[ (data[algorithm_variable] == algo)][value_variable].reset_index(drop=True)
+    return df_autorank

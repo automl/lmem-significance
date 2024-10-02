@@ -2,6 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/significance-analysis?color=informational)](https://pypi.org/project/significance-analysis/)
 [![Python versions](https://img.shields.io/pypi/pyversions/significance-analysis)](https://pypi.org/project/significance-analysis/)
+
 [![License](https://img.shields.io/pypi/l/significance-analysis?color=informational)](LICENSE)
 
 This package is used to analyse datasets of different HPO-algorithms performing on multiple benchmarks, using a Linear Mixed-Effects Model-based approach.
