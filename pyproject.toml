@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "significance_analysis"
-version = "v0.2.1"
+version = "v0.2.2"
 description = "Significance Analysis for HPO-algorithms performing on multiple benchmarks"
 authors = ["Anton Merlin Geburek <gebureka@cs.uni-freiburg.de>",
 "Danny Stoll <stolld@cs.uni-freiburg.de>"]
@@ -14,6 +14,8 @@ classifiers = [
   "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
@@ -22,7 +24,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.11"
+python = ">=3.8,<3.13"
 pymer4 = "^0.8.0"
 matplotlib = "<3.7.0"
 pytest = "^8.3.3"

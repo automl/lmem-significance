@@ -2,7 +2,6 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/significance-analysis?color=informational)](https://pypi.org/project/significance-analysis/)
 [![Python versions](https://img.shields.io/pypi/pyversions/significance-analysis)](https://pypi.org/project/significance-analysis/)
-
 [![License](https://img.shields.io/pypi/l/significance-analysis?color=informational)](LICENSE)
 
 This package is used to analyse datasets of different HPO-algorithms performing on multiple benchmarks, using a Linear Mixed-Effects Model-based approach.
@@ -13,17 +12,19 @@ As indicated with the `v0.x.x` version number, Significance Analysis is early st
 
 ## Documentation
 
-Please have a look at our [example](significance_analysis_example/analysis_example.ipynb).
-The dataset should be a pandas dataframe of the following format:
+For an interactive overview, please have a look at our [example](significance_analysis_example/analysis_example.ipynb).
+
+Every dataset should be a pandas dataframe of the following format:
 
 | algorithm  | benchmark  | metric | optional: budget/prior/... |
 | ---------- | ---------- | ------ | -------------------------- |
-| Algorithm1 | Benchmark1 | x.xxx  | 1.0                        |
-| Algorithm1 | Benchmark1 | x.xxx  | 2.0                        |
-| Algorithm1 | Benchmark2 | x.xxx  | 1.0                        |
+| Algorithm1 | Benchmark1 | 3.141  | 1.0                        |
+| Algorithm1 | Benchmark1 | 6.283  | 2.0                        |
+| Algorithm1 | Benchmark2 | 2.718  | 1.0                        |
 | ...        | ...        | ...    | ...                        |
-| Algorithm2 | Benchmark2 | x.xxx  | 2.0                        |
+| Algorithm2 | Benchmark2 | 0.621  | 2.0                        |
 
+As it is used to train a model, there can not be missing values, but duplicates are allowed.
 Our function `dataset_validator` checks for this format.
 
 ## Installation
@@ -111,3 +112,7 @@ scores = metafeature_analysis(data, ("HB", "PB"), "prior")
 ```
 
 For more details and features please have a look at our [example](significance_analysis_example/analysis_example.py).
+
+## Contributing
+
+We welcome contributions from everyone, feel free to raise issues or submit pull requests.
