@@ -120,6 +120,8 @@ For more details and features please have a look at our [example](significance_a
 
 We welcome contributions from everyone, feel free to raise issues or submit pull requests.
 
+______________________________________________________________________
+
 ### To cite the paper or code
 
 ```bibtex
