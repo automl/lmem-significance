@@ -122,11 +122,13 @@ We welcome contributions from everyone, feel free to raise issues or submit pull
 
 ### To cite the paper or code
 
+```bibtex
 @misc{geburek2024lmemsposthocanalysishpo,
 title={LMEMs for post-hoc analysis of HPO Benchmarking},
 author={Anton Geburek and Neeratyoy Mallik and Danny Stoll and Xavier Bouthillier and Frank Hutter},
 year={2024},
 eprint={2408.02533},
 archivePrefix={arXiv},
-primaryClass={cs.LG},
+primaryClass={cs.LG}
 }
+```
