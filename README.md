@@ -119,3 +119,14 @@ For more details and features please have a look at our [example](significance_a
 ## Contributing
 
 We welcome contributions from everyone, feel free to raise issues or submit pull requests.
+
+### To cite the paper or code
+
+@misc{geburek2024lmemsposthocanalysishpo,
+title={LMEMs for post-hoc analysis of HPO Benchmarking},
+author={Anton Geburek and Neeratyoy Mallik and Danny Stoll and Xavier Bouthillier and Frank Hutter},
+year={2024},
+eprint={2408.02533},
+archivePrefix={arXiv},
+primaryClass={cs.LG},
+}
