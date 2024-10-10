@@ -3,6 +3,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/significance-analysis?color=informational)](https://pypi.org/project/significance-analysis/)
 [![Python versions](https://img.shields.io/pypi/pyversions/significance-analysis)](https://pypi.org/project/significance-analysis/)
 [![License](https://img.shields.io/pypi/l/significance-analysis?color=informational)](LICENSE)
+[![Coverage Status](./tests/coverage-badge.svg?dummy=8484744)](./tests/reports/cov_html/index.html)
+[![Tests Status](./tests/tests-badge.svg?dummy=8484744)](./tests/reports/junit/report.html)
+[![arXiv](https://img.shields.io/badge/arXiv-2408.02533-b31b1b.svg)](https://arxiv.org/abs/2408.02533)
 
 This package is used to analyse datasets of different HPO-algorithms performing on multiple benchmarks, using a Linear Mixed-Effects Model-based approach.
 
