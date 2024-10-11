@@ -4,11 +4,13 @@ import typing
 import matplotlib
 import numpy as np
 import pandas as pd
+import requests
 from autorank._util import RankResult, get_sorted_rank_groups
 from matplotlib import pyplot as plt
 from pandas.api.types import is_numeric_dtype
 from pymer4.models import Lm, Lmer
 from scipy import stats
+from pathlib import Path
 
 pd.options.mode.chained_assignment = None
 
@@ -18,6 +20,35 @@ SEED = "seed"
 BUDGET = "used_fidelity"
 BENCHMARK = "benchmark"
 
+def download_dataset(url: str, path: Path) -> None:
+    """Helper function to download a file from a URL and decompress it and store by given name.
+
+    Args:
+        url (str): URL of the file to download
+        path (Path): Path along with filename to save the downloaded file
+
+    Returns:
+        bool: Flag to indicate if the download and decompression was successful
+    """
+    # Check if the file already exists
+    if path.exists():
+        return
+
+    # Send a HTTP request to the URL of the file
+    response = requests.get(url, allow_redirects=True)
+
+    # Check if the request is successful
+    if response.status_code != 200:
+        raise ValueError(
+            f"Failed to download the surrogate from {url}."
+            f" Recieved HTTP status code: {response.status_code}."
+            "Please either try again later, use an alternative link or contact the authors through github."
+        )
+
+    print(response.content)
+    # Save the .tar.gz file
+    data=pd.DataFrame(response.content)
+    data.to_parquet(path)
 
 def cd_diagram(
     result, reverse: bool = False, width: float = 4, system_id="algorithm", parent_ax=None

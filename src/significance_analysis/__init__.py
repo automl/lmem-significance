@@ -8,4 +8,5 @@ from significance_analysis.tools import (
     model,
     seed_dependency_check,
     convert_to_autorank,
+    download_dataset,
 )
