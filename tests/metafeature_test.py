@@ -67,6 +67,7 @@ class TestMetafeatureAnalysis(unittest.TestCase):
             fidelity_var="budget",
             verbose=False,
         )
+        # Check the significance values
         significances = results[1]["Sig"].values.tolist()
         significances = ["" if x == "." else x for x in significances]
         self.assertListEqual(

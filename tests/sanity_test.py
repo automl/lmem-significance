@@ -73,8 +73,10 @@ class TestSanityChecks(unittest.TestCase):
         """
         Test that it correctly identifies the random seed as factor for algorithm A-1
         """
+        # Test the seed dependency check on a random DataFrame
         result = seed_dependency_check(self.random_df, verbose=False)
         self.assertEqual(result, [])
+        # Test the seed dependency check on a DataFrame with specific values
         result = seed_dependency_check(self.seed_df, verbose=False)
         self.assertEqual(result, ["A-1"])
 
@@ -82,8 +84,10 @@ class TestSanityChecks(unittest.TestCase):
         """
         Test that it correctly identifies the uninteresting benchmark
         """
+        # Test the benchmark information check on a random DataFrame
         result = benchmark_information_check(self.random_df, verbose=False)
         self.assertEqual(result, {"B-0": False, "B-1": False, "B-2": False})
+        # Test the benchmark information check on a DataFrame with specific values
         result = benchmark_information_check(self.benchmark_df, verbose=False)
         self.assertEqual(result, {"B-0": False, "B-1": True, "B-2": True})
 
@@ -91,8 +95,10 @@ class TestSanityChecks(unittest.TestCase):
         """
         Test that it correctly identifies the budget as factor
         """
+        # Test the fidelity check on a random DataFrame
         result = fidelity_check(fidelity_var="budget", data=self.random_df, verbose=False)
         self.assertEqual(result, "none")
+        # Test the fidelity check on a DataFrame with specific values
         result = fidelity_check(fidelity_var="budget", data=self.budget_df, verbose=False)
         self.assertEqual(result, "simple_effect")
 
