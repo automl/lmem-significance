@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "significance_analysis"
-version = "v0.2.3"
+version = "v0.2.4"
 description = "Significance Analysis for HPO-algorithms performing on multiple benchmarks"
 authors = ["Anton Merlin Geburek <gebureka@cs.uni-freiburg.de>",
 "Danny Stoll <stolld@cs.uni-freiburg.de>"]
