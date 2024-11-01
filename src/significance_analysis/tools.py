@@ -1,9 +1,12 @@
 import math
+import os
 import typing
+from pathlib import Path
 
 import matplotlib
 import numpy as np
 import pandas as pd
+import requests
 from autorank._util import RankResult, get_sorted_rank_groups
 from matplotlib import pyplot as plt
 from pandas.api.types import is_numeric_dtype
@@ -435,7 +438,7 @@ def model(
 
     if not "|" in formula:
         if dummy:
-            data.loc[:,"dummy"] = "0"
+            data.loc[:, "dummy"] = "0"
             data.at[data.index[0], "dummy"] = "1"
             formula += "+(1|dummy)"
         else:
@@ -499,7 +502,9 @@ def metafeature_analysis(
         lambda x: f"{x[benchmark_var]} x {x[metafeature_var]}", axis=1
     )
     dataset = dataset.loc[dataset[algorithm_var].isin(algorithms)]
-    dataset, cols = dataframe_validator(dataset, fidelity_var=fidelity_var ,metafeature=metafeature_var, verbose=verbose)
+    dataset, cols = dataframe_validator(
+        dataset, fidelity_var=fidelity_var, metafeature=metafeature_var, verbose=verbose
+    )
     if not all(
         [
             x in cols
@@ -645,7 +650,9 @@ def seed_dependency_check(
         ]["Name"].to_list()
         influenced = [x.rsplit(algorithm_var, 1)[1] for x in influenced]
         if verbose:
-            print(f"Seed is a significant effect, likely influenced algorithms: {influenced}")
+            print(
+                f"Seed is a significant effect, likely influenced algorithms: {influenced}"
+            )
         return influenced
     else:
         if verbose:
@@ -842,11 +849,20 @@ def fidelity_check(
         return "none"
 
 
+def download_priorband_data() -> None:
+    """Download the priorband dataset from figshare."""
+    if not os.path.exists(Path("./dataset/priorband_data.parquet")):
+        response = requests.get("https://api.figshare.com/v2/file/download/49732203")
+        Path("./dataset").mkdir(exist_ok=True)
+        with open("dataset/priorband_data.parquet", "wb") as file_handle:
+            file_handle.write(response.content)
+
+
 def convert_to_autorank(
     data: pd.DataFrame,
     algorithm_variable: str = "algorithm",
-    value_variable: str = "value"
-)->pd.DataFrame:
+    value_variable: str = "value",
+) -> pd.DataFrame:
     """Converts an LMEM-compatible-formatted dataframe to the format required by the autorank package.
 
     Args:
@@ -860,5 +876,7 @@ def convert_to_autorank(
 
     df_autorank = pd.DataFrame()
     for algo in data[algorithm_variable].unique():
-        df_autorank[algo] = -data[ (data[algorithm_variable] == algo)][value_variable].reset_index(drop=True)
+        df_autorank[algo] = -data[(data[algorithm_variable] == algo)][
+            value_variable
+        ].reset_index(drop=True)
     return df_autorank
